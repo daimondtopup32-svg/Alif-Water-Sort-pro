@@ -1,0 +1,6 @@
+{
+  "name": "Alif Water Sort Pro",
+  "description": "Alif Water Sort Pro - Premium colorful liquid puzzle game with realistic pouring physics, glowing glass tubes, and smart hints.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
