@@ -112,6 +112,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         initialLevelTubes = level.tubes
         historyStack.clear()
 
+        // Detect initial deadlock (for Level 21+ where 0 empty tubes exist and all glasses have colors)
+        val initiallyStuck = !GameSolver.hasValidMoves(level.tubes)
+
         _uiState.update {
             it.copy(
                 currentLevel = levelNumber,
@@ -131,7 +134,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 extraTubesCount = 0,
                 hintSourceIndex = null,
                 hintTargetIndex = null,
-                isStuck = false,
+                isStuck = initiallyStuck,
                 shakingTubeIndex = null
             )
         }
@@ -390,7 +393,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addExtraTube() {
         val state = _uiState.value
-        if (state.isPouring || state.extraTubesCount >= 2) return
+        // Allow adding up to 5 extra tubes via video ads as requested
+        if (state.isPouring || state.extraTubesCount >= 5) return
 
         // Open Watch Ad Dialog for instant extra tube upon 1 video ad
         _uiState.update {
@@ -403,7 +407,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun grantExtraTube() {
         val state = _uiState.value
-        if (state.extraTubesCount >= 2) return
+        if (state.extraTubesCount >= 5) return
 
         soundManager.playCompleteTube()
         val newTubeId = state.tubes.size

@@ -26,11 +26,13 @@ class UserRepository(context: Context) {
 
     suspend fun initialize() {
         withContext(Dispatchers.IO) {
+            com.example.data.firebase.RealtimeDatabaseManager.pingConnection()
             val activeId = authPrefs.getLong(KEY_ACTIVE_USER_ID, -1L)
             if (activeId != -1L) {
                 val user = userDao.getUserById(activeId)
                 if (user != null) {
                     _currentUser.value = user
+                    com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(user)
                     return@withContext
                 }
             }
@@ -39,6 +41,11 @@ class UserRepository(context: Context) {
             if (guest != null) {
                 _currentUser.value = guest
                 authPrefs.edit().putLong(KEY_ACTIVE_USER_ID, guest.id).apply()
+                com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(guest)
+            } else {
+                // Auto create initial player on first launch
+                val autoGuest = playAsGuest()
+                com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(autoGuest)
             }
         }
     }
@@ -88,6 +95,7 @@ class UserRepository(context: Context) {
 
         authPrefs.edit().putLong(KEY_ACTIVE_USER_ID, id).apply()
         _currentUser.value = registeredUser
+        com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(registeredUser)
         Result.success(registeredUser)
     }
 
@@ -112,6 +120,7 @@ class UserRepository(context: Context) {
 
         authPrefs.edit().putLong(KEY_ACTIVE_USER_ID, user.id).apply()
         _currentUser.value = user
+        com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(user)
         Result.success(user)
     }
 
@@ -120,6 +129,7 @@ class UserRepository(context: Context) {
         if (existingGuest != null) {
             authPrefs.edit().putLong(KEY_ACTIVE_USER_ID, existingGuest.id).apply()
             _currentUser.value = existingGuest
+            com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(existingGuest)
             return@withContext existingGuest
         }
 
@@ -137,6 +147,7 @@ class UserRepository(context: Context) {
         val savedGuest = guest.copy(id = id)
         authPrefs.edit().putLong(KEY_ACTIVE_USER_ID, id).apply()
         _currentUser.value = savedGuest
+        com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(savedGuest)
         savedGuest
     }
 
@@ -145,6 +156,7 @@ class UserRepository(context: Context) {
         val updated = user.copy(avatarEmoji = newEmoji)
         userDao.updateUser(updated)
         _currentUser.value = updated
+        com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(updated)
     }
 
     suspend fun updateUserStats(coins: Int, currentLevel: Int, maxUnlockedLevel: Int) = withContext(Dispatchers.IO) {
@@ -156,6 +168,7 @@ class UserRepository(context: Context) {
         )
         userDao.updateUser(updated)
         _currentUser.value = updated
+        com.example.data.firebase.RealtimeDatabaseManager.syncUserToDatabase(updated)
     }
 
     fun logout() {

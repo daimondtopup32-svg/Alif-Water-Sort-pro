@@ -121,13 +121,17 @@ fun WaterSortScreen(
     // Dynamic large tube size according to tube count for prominent, beautiful view
     val tubeWidth = when {
         state.tubes.size <= 4 -> 66.dp
-        state.tubes.size <= 6 -> 64.dp
-        else -> 60.dp
+        state.tubes.size <= 6 -> 62.dp
+        state.tubes.size <= 10 -> 54.dp
+        state.tubes.size <= 13 -> 48.dp
+        else -> 42.dp
     }
     val tubeHeight = when {
         state.tubes.size <= 4 -> 205.dp
         state.tubes.size <= 6 -> 195.dp
-        else -> 185.dp
+        state.tubes.size <= 10 -> 175.dp
+        state.tubes.size <= 13 -> 150.dp
+        else -> 135.dp
     }
 
     GameAestheticBackground(
@@ -160,6 +164,7 @@ fun WaterSortScreen(
             ) {
                 StuckWarningBanner(
                     isBengali = state.isBengali,
+                    hasEmptyTube = state.tubes.any { it.isEmpty },
                     onRestart = { viewModel.restartLevel() },
                     onAddTube = { viewModel.addExtraTube() }
                 )
@@ -458,6 +463,7 @@ private fun TopGameBar(
 @Composable
 private fun StuckWarningBanner(
     isBengali: Boolean,
+    hasEmptyTube: Boolean,
     onRestart: () -> Unit,
     onAddTube: () -> Unit
 ) {
@@ -488,13 +494,21 @@ private fun StuckWarningBanner(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = if (isBengali) "কোনো চাল নেই! আটকে গেছেন?" else "No moves left! Stuck?",
+                        text = if (!hasEmptyTube) {
+                            if (isBengali) "💀 সব গ্লাস ভর্তি—কোনো গ্লাস খালি নেই!" else "All glasses filled—zero empty glasses!"
+                        } else {
+                            if (isBengali) "⛔ কোনো চাল নেই! খেলা আটকে গেছে" else "No moves left! Puzzle is locked"
+                        },
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (isBengali) "ভিডিও দেখে নতুন গ্লাস নিন এবং খেলুন" else "Watch video ad to get a free tube",
+                        text = if (!hasEmptyTube) {
+                            if (isBengali) "ভিডিও দেখে ৩-৪টি খালি গ্লাস নিন এবং খেলা শুরু করুন!" else "Watch video ads to add 3-4 empty glasses to play!"
+                        } else {
+                            if (isBengali) "ভিডিও বিজ্ঞাপন দেখে ৩-৪টি খালি গ্লাস নিন!" else "Watch video ads to add 3-4 extra empty glasses!"
+                        },
                         color = Color(0xEEFFFFFF),
                         fontSize = 10.5.sp
                     )
@@ -517,7 +531,7 @@ private fun StuckWarningBanner(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = if (isBengali) "+১ গ্লাস" else "+1 Tube",
+                    text = if (isBengali) "+১ গ্লাস (ভিডিও)" else "+1 Tube (Ad)",
                     color = Color(0xFF062A14),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
@@ -549,23 +563,43 @@ private fun TubesGameBoard(
     modifier: Modifier = Modifier
 ) {
     val total = tubes.size
-    val rows = if (total <= 5) {
-        listOf(tubes.indices.toList())
-    } else {
-        val topCount = (total + 1) / 2
-        listOf(
-            (0 until topCount).toList(),
-            (topCount until total).toList()
-        )
+    val rows = when {
+        total <= 5 -> listOf(tubes.indices.toList())
+        total <= 10 -> {
+            val topCount = (total + 1) / 2
+            listOf(
+                (0 until topCount).toList(),
+                (topCount until total).toList()
+            )
+        }
+        else -> {
+            // Adaptive 3 rows for 11+ tubes
+            val perRow = (total + 2) / 3
+            val r1 = (0 until perRow.coerceAtMost(total)).toList()
+            val r2 = (perRow until (perRow * 2).coerceAtMost(total)).toList()
+            val r3 = ((perRow * 2) until total).toList()
+            listOf(r1, r2, r3).filter { it.isNotEmpty() }
+        }
+    }
+
+    val verticalRowSpacing = when {
+        total <= 6 -> 28.dp
+        total <= 10 -> 18.dp
+        else -> 10.dp
     }
 
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(28.dp)
+        verticalArrangement = Arrangement.spacedBy(verticalRowSpacing)
     ) {
         rows.forEach { rowIndices ->
-            val rowSpacing = if (rowIndices.size <= 4) 16.dp else 12.dp
+            val rowSpacing = when {
+                rowIndices.size <= 3 -> 18.dp
+                rowIndices.size <= 4 -> 14.dp
+                rowIndices.size <= 5 -> 10.dp
+                else -> 6.dp
+            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(rowSpacing),
                 verticalAlignment = Alignment.Bottom
@@ -753,7 +787,7 @@ private fun BottomActionBar(
             )
 
             // 4. Add Extra Tube (+1 Bottle Booster via Video Ad)
-            val canAddMore = extraTubesCount < 2
+            val canAddMore = extraTubesCount < 5
             ActionButtonItem(
                 icon = Icons.Default.Add,
                 label = if (isBengali) "+১ গ্লাস" else "+1 Glass",

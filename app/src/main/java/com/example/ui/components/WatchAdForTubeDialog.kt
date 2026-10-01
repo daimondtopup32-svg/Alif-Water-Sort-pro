@@ -127,8 +127,8 @@ fun WatchAdForTubeDialog(
                         if (isBengali) "🎉 দারুণ! বিজ্ঞাপন দেখা সম্পন্ন হয়েছে।"
                         else "🎉 Awesome! Video ad completed."
                     } else {
-                        if (isBengali) "লেভেলটি কঠিন লাগছে? ১টি ছোট ভিডিও বিজ্ঞাপন দেখুন এবং সাথে সাথে একটি অতিরিক্ত খালি গ্লাস নিয়ে খেলুন!"
-                        else "Level feels challenging? Watch 1 quick video ad to get an extra empty glass and solve the level!"
+                        if (isBengali) "এই লেভেলটি অত্যন্ত কঠিন! ভিডিও বিজ্ঞাপন দেখে ৩ থেকে ৪টি পর্যন্ত খালি গ্লাস যোগ করুন এবং সহজে ম্যাচটি জিতুন!"
+                        else "This level is extremely challenging! Watch video ads to add 3 to 4 extra empty glasses and win easily!"
                     },
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,

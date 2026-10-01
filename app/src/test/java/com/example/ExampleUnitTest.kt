@@ -75,4 +75,73 @@ class ExampleUnitTest {
         )
         assertFalse(GameSolver.isWon(notWonTubes))
     }
+
+    @Test
+    fun levelGenerator_level11_isUltraHardWithDistinctTopsAndSingleEmptyTube() {
+        val level11 = LevelGenerator.getLevel(11)
+        assertEquals(11, level11.levelNumber)
+        // 7 colors + 1 empty = 8 tubes total
+        assertEquals(8, level11.tubes.size)
+        val emptyTubes = level11.tubes.filter { it.isEmpty }
+        assertEquals(1, emptyTubes.size)
+
+        val fullTubes = level11.tubes.filter { it.isFull }
+        assertEquals(7, fullTubes.size)
+
+        // All 7 full tubes have distinct top colors
+        val topColors = fullTubes.map { it.topColor }.toSet()
+        assertEquals(7, topColors.size)
+    }
+
+    @Test
+    fun levelGenerator_level11_withExtraTubesAllowsMultipleVideoGrants() {
+        val level11 = LevelGenerator.getLevel(11)
+        var tubes = level11.tubes
+        // Simulate watching 4 video ads to grant 4 extra empty tubes
+        for (i in 1..4) {
+            val newId = tubes.size
+            tubes = tubes + Tube(id = newId, liquids = emptyList(), isExtraTube = true)
+        }
+        // Original 8 + 4 extra = 12 tubes
+        assertEquals(12, tubes.size)
+        val emptyTubes = tubes.filter { it.isEmpty }
+        assertEquals(5, emptyTubes.size)
+    }
+
+    @Test
+    fun levelGenerator_level2_escalatesDifficultyRightAfterLevel1() {
+        val level1 = LevelGenerator.getLevel(1)
+        val level2 = LevelGenerator.getLevel(2)
+
+        // Level 1 has 2 empty tubes
+        assertEquals(2, level1.tubes.count { it.isEmpty })
+
+        // Level 2 immediately gets harder with only 1 empty tube
+        assertEquals(1, level2.tubes.count { it.isEmpty })
+        assertEquals(3, level2.tubes.count { it.isFull })
+    }
+
+    @Test
+    fun levelGenerator_afterLevel20_hasZeroEmptyTubes_allTubesHaveColor() {
+        val level21 = LevelGenerator.getLevel(21)
+        assertEquals(21, level21.levelNumber)
+
+        // As requested: "২০ লেভেলের পর একটা গ্লাসও খালি থাকবে না সবগুলোতে রং থাকবে"
+        val emptyCount = level21.tubes.count { it.isEmpty }
+        assertEquals(0, emptyCount)
+
+        // All tubes contain colored liquids
+        assertTrue(level21.tubes.all { it.liquids.isNotEmpty() })
+
+        // Because all tubes are full with distinct tops and 0 empty tubes, valid moves initially = 0
+        assertFalse(GameSolver.hasValidMoves(level21.tubes))
+
+        // Watching rewarded video ads to add 3-4 extra tubes creates buffer space
+        var playableTubes = level21.tubes
+        for (i in 1..4) {
+            playableTubes = playableTubes + Tube(id = playableTubes.size, liquids = emptyList(), isExtraTube = true)
+        }
+        assertEquals(4, playableTubes.count { it.isEmpty })
+        assertTrue(GameSolver.hasValidMoves(playableTubes))
+    }
 }

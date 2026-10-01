@@ -13,7 +13,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.watersort.pqzrt"
+    applicationId = "Alif.WaterSortpro"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -101,6 +101,7 @@ dependencies {
   // implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
+  implementation(libs.firebase.database)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
