@@ -367,22 +367,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun undo() {
-        if (_uiState.value.isPouring || historyStack.isEmpty()) return
-
-        val prevTubes = historyStack.removeAt(historyStack.size - 1)
-        soundManager.playTap()
-
-        _uiState.update {
-            it.copy(
-                tubes = prevTubes,
-                selectedTubeIndex = null,
-                canUndo = historyStack.isNotEmpty(),
-                movesCount = (it.movesCount - 1).coerceAtLeast(0),
-                isStuck = false,
-                hintSourceIndex = null,
-                hintTargetIndex = null
-            )
-        }
+        // Player cannot return/undo moves as requested: "গেমে যদি ভুল করে তাহলে একটি রিটার্ন পিছনে আসতে পারবে না"
+        return
     }
 
     fun restartLevel() {
@@ -393,15 +379,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addExtraTube() {
         val state = _uiState.value
-        // Allow adding up to 5 extra tubes via video ads as requested
+        // Allow adding up to 5 extra tubes via video ads or coins as requested
         if (state.isPouring || state.extraTubesCount >= 5) return
 
-        // Open Watch Ad Dialog for instant extra tube upon 1 video ad
         _uiState.update {
             it.copy(
                 showWatchAdDialog = true,
                 adErrorMessage = null
             )
+        }
+    }
+
+    fun buyExtraTubeWithCoins(cost: Int = 15) {
+        val state = _uiState.value
+        if (state.extraTubesCount >= 5) return
+        if (state.coins >= cost) {
+            preferences.spendCoins(cost)
+            grantExtraTube()
+            syncUserStats()
+        } else {
+            soundManager.playError()
         }
     }
 
@@ -442,13 +439,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(isAdLoading = false) }
                 },
                 onFailed = { error ->
-                    Log.w("GameViewModel", "Ad show failed: $error, falling back to simulated ad for smooth user testing")
+                    Log.w("GameViewModel", "Ad show notice: $error, falling back to simulated ad")
                     onAdWatchedSuccessfully()
                 }
             )
         } else {
-            // Ad loading or in development/offline test environment:
-            // Complete short ad simulation so player/tester gets the tube reliably
             viewModelScope.launch {
                 delay(1000)
                 onAdWatchedSuccessfully()
@@ -465,8 +460,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 isAdLoading = false
             )
         }
-        // 1 video ad is enough to grant the extra tube immediately!
-        if (nextCount >= 1) {
+        // Player must watch 3 videos to get 1 extra tube
+        if (nextCount >= 3) {
             grantExtraTube()
         }
     }

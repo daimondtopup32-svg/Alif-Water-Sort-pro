@@ -200,11 +200,9 @@ fun WaterSortScreen(
 
             // 4. Bottom Controls Bar
             BottomActionBar(
-                canUndo = state.canUndo,
                 coins = state.coins,
                 extraTubesCount = state.extraTubesCount,
                 isBengali = state.isBengali,
-                onUndo = { viewModel.undo() },
                 onRestart = { viewModel.restartLevel() },
                 onHint = { viewModel.requestHint() },
                 onAddTube = { viewModel.addExtraTube() },
@@ -314,15 +312,18 @@ fun WaterSortScreen(
             onDismiss = { showThemeSettings = false }
         )
 
-        // Rewarded Ads Dialog for +1 Extra Tube (1 Video Ad = Instant Tube)
+        // Rewarded Ads & Coins Dialog for +1 Extra Tube (3 Videos or 15 Coins)
         WatchAdForTubeDialog(
             show = state.showWatchAdDialog,
             isBengali = state.isBengali,
             adsWatched = state.adsWatchedForTube,
-            targetAds = 1,
+            targetAds = 3,
+            coins = state.coins,
+            coinCost = 15,
             isAdLoading = state.isAdLoading,
             errorMessage = state.adErrorMessage,
             onWatchAd = { viewModel.watchAdForTube(activity) },
+            onBuyWithCoins = { viewModel.buyExtraTubeWithCoins(15) },
             onClaimTube = { viewModel.grantExtraTube() },
             onDismiss = { viewModel.dismissWatchAdDialog() }
         )
@@ -563,9 +564,10 @@ private fun TubesGameBoard(
     modifier: Modifier = Modifier
 ) {
     val total = tubes.size
+    // Enforce strictly maximum 4 glasses per line/row as requested: "গ্লাস এক লাইনে চারটার বেশি হবে না"
     val rows = when {
-        total <= 5 -> listOf(tubes.indices.toList())
-        total <= 10 -> {
+        total <= 4 -> listOf(tubes.indices.toList())
+        total in 5..8 -> {
             val topCount = (total + 1) / 2
             listOf(
                 (0 until topCount).toList(),
@@ -573,12 +575,7 @@ private fun TubesGameBoard(
             )
         }
         else -> {
-            // Adaptive 3 rows for 11+ tubes
-            val perRow = (total + 2) / 3
-            val r1 = (0 until perRow.coerceAtMost(total)).toList()
-            val r2 = (perRow until (perRow * 2).coerceAtMost(total)).toList()
-            val r3 = ((perRow * 2) until total).toList()
-            listOf(r1, r2, r3).filter { it.isNotEmpty() }
+            tubes.indices.chunked(4)
         }
     }
 
@@ -730,11 +727,9 @@ private fun TubesGameBoard(
 
 @Composable
 private fun BottomActionBar(
-    canUndo: Boolean,
     coins: Int,
     extraTubesCount: Int,
     isBengali: Boolean,
-    onUndo: () -> Unit,
     onRestart: () -> Unit,
     onHint: () -> Unit,
     onAddTube: () -> Unit,
@@ -764,18 +759,7 @@ private fun BottomActionBar(
                 onClick = onRestart
             )
 
-            // 2. Undo Button
-            ActionButtonItem(
-                icon = Icons.AutoMirrored.Filled.Undo,
-                label = if (isBengali) "আনডু" else "Undo",
-                enabled = canUndo,
-                badge = null,
-                iconTint = if (canUndo) Color(0xFF00E5FF) else Color(0x55FFFFFF),
-                testTag = "undo_button",
-                onClick = onUndo
-            )
-
-            // 3. Hint Button (Smart Solver)
+            // 2. Hint Button (Smart Solver)
             ActionButtonItem(
                 icon = Icons.Default.Lightbulb,
                 label = if (isBengali) "ইঙ্গিত" else "Hint",
@@ -786,13 +770,13 @@ private fun BottomActionBar(
                 onClick = onHint
             )
 
-            // 4. Add Extra Tube (+1 Bottle Booster via Video Ad)
+            // 3. Add Extra Tube (+1 Bottle Booster via 3 Video Ads or Coins)
             val canAddMore = extraTubesCount < 5
             ActionButtonItem(
                 icon = Icons.Default.Add,
                 label = if (isBengali) "+১ গ্লাস" else "+1 Glass",
                 enabled = canAddMore,
-                badge = if (canAddMore) "📺 ফ্রি" else "পূর্ণ",
+                badge = if (canAddMore) "ভিডিও/কয়েন" else "পূর্ণ",
                 iconTint = if (canAddMore) Color(0xFF00E676) else Color(0x55FFFFFF),
                 testTag = "add_tube_button",
                 onClick = onAddTube

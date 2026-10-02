@@ -6,9 +6,17 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 data class RealtimeUserScore(
     val userId: String = "",
@@ -28,6 +36,13 @@ object RealtimeDatabaseManager {
     private const val LEADERBOARD_PATH = "leaderboard"
     private const val STATUS_PATH = "app_status"
 
+    private val ioScope = CoroutineScope(Dispatchers.IO)
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     val database: FirebaseDatabase by lazy {
         try {
             val db = FirebaseDatabase.getInstance(DATABASE_URL)
@@ -44,69 +59,138 @@ object RealtimeDatabaseManager {
     }
 
     /**
-     * Sends an immediate connection verification ping to Realtime Database.
+     * Sends an immediate connection verification ping to Realtime Database
+     * using both Firebase SDK and Direct HTTPS REST API.
      */
     fun pingConnection() {
+        // 1. Firebase SDK Ping
         try {
             val pingRef = database.getReference(STATUS_PATH)
             val pingData = mapOf(
                 "appName" to "Alif Water Sort Pro",
-                "packageName" to "Alif.WaterSortpro",
+                "packageName" to "alif.WaterSortpro",
                 "status" to "Connected Successfully",
                 "lastPing" to System.currentTimeMillis()
             )
             pingRef.setValue(pingData)
                 .addOnSuccessListener {
-                    Log.i(TAG, "Firebase Realtime Database Ping SUCCESSFUL!")
+                    Log.i(TAG, "Firebase SDK Ping SUCCESSFUL!")
                 }
                 .addOnFailureListener { error ->
-                    Log.e(TAG, "Firebase Realtime Database Ping FAILED (Check Rules in Firebase Console): ${error.message}")
+                    Log.e(TAG, "Firebase SDK Ping FAILED: ${error.message}")
                 }
         } catch (e: Exception) {
-            Log.e(TAG, "Ping exception: ${e.message}")
+            Log.e(TAG, "Ping SDK exception: ${e.message}")
+        }
+
+        // 2. Direct HTTPS REST Ping (guarantees write over raw HTTP)
+        ioScope.launch {
+            try {
+                val json = """
+                    {
+                      "appName": "Alif Water Sort Pro",
+                      "packageName": "alif.WaterSortpro",
+                      "status": "Connected Successfully (REST)",
+                      "lastPing": ${System.currentTimeMillis()}
+                    }
+                """.trimIndent()
+                val request = Request.Builder()
+                    .url("$DATABASE_URL/$STATUS_PATH.json")
+                    .put(json.toRequestBody("application/json".toMediaType()))
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.i(TAG, "Direct REST Ping SUCCESSFUL: HTTP ${response.code}")
+                    } else {
+                        Log.e(TAG, "Direct REST Ping FAILED: HTTP ${response.code} (Check Firebase Database Rules!)")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct REST Ping Network Exception: ${e.message}")
+            }
         }
     }
 
     /**
-     * Synchronizes the user account to Firebase Realtime Database.
+     * Synchronizes the user account to Firebase Realtime Database
+     * using BOTH Firebase Native SDK and Direct REST API.
      */
     fun syncUserToDatabase(user: UserAccount) {
-        try {
-            val userKey = "user_${user.id}"
-            val scoreEntry = RealtimeUserScore(
-                userId = userKey,
-                username = user.username,
-                avatarEmoji = user.avatarEmoji,
-                currentLevel = user.currentLevel,
-                maxUnlockedLevel = user.maxUnlockedLevel,
-                coins = user.coins,
-                timestamp = System.currentTimeMillis()
-            )
+        val userKey = "user_${user.id}"
+        val scoreEntry = RealtimeUserScore(
+            userId = userKey,
+            username = user.username,
+            avatarEmoji = user.avatarEmoji,
+            currentLevel = user.currentLevel,
+            maxUnlockedLevel = user.maxUnlockedLevel,
+            coins = user.coins,
+            timestamp = System.currentTimeMillis()
+        )
 
-            // Write to users node
+        // 1. Firebase Native SDK Sync
+        try {
             val usersRef = database.getReference(USERS_PATH).child(userKey)
             usersRef.setValue(scoreEntry)
                 .addOnSuccessListener {
-                    Log.i(TAG, "User $userKey synced to users path successfully")
+                    Log.i(TAG, "SDK User $userKey synced to users path successfully")
                 }
                 .addOnFailureListener { error ->
-                    Log.w(TAG, "Failed to sync user to Realtime Database: ${error.message}")
+                    Log.w(TAG, "SDK Failed to sync user: ${error.message}")
                 }
 
-            // Write to leaderboard node
             val leaderboardRef = database.getReference(LEADERBOARD_PATH).child(userKey)
             leaderboardRef.setValue(scoreEntry)
                 .addOnSuccessListener {
-                    Log.i(TAG, "User $userKey synced to leaderboard successfully")
+                    Log.i(TAG, "SDK User $userKey synced to leaderboard successfully")
                 }
                 .addOnFailureListener { error ->
-                    Log.w(TAG, "Failed to sync user to leaderboard: ${error.message}")
+                    Log.w(TAG, "SDK Failed to sync leaderboard: ${error.message}")
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "SDK Exception during sync: ${e.message}")
+        }
+
+        // 2. Direct HTTPS REST API Sync (Instant fallback that bypasses Play Services and guarantees immediate commit)
+        ioScope.launch {
+            try {
+                val userJson = """
+                    {
+                      "userId": "$userKey",
+                      "username": "${user.username.replace("\"", "\\\"")}",
+                      "avatarEmoji": "${user.avatarEmoji}",
+                      "currentLevel": ${user.currentLevel},
+                      "maxUnlockedLevel": ${user.maxUnlockedLevel},
+                      "coins": ${user.coins},
+                      "timestamp": ${System.currentTimeMillis()}
+                    }
+                """.trimIndent()
+
+                val body = userJson.toRequestBody("application/json".toMediaType())
+
+                // PUT /users/user_X.json
+                val userReq = Request.Builder()
+                    .url("$DATABASE_URL/$USERS_PATH/$userKey.json")
+                    .put(body)
+                    .build()
+                httpClient.newCall(userReq).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        Log.i(TAG, "Direct REST sync for $userKey SUCCESSFUL: HTTP ${resp.code}")
+                    } else {
+                        val errorBody = resp.body?.string()
+                        Log.e(TAG, "Direct REST sync FAILED: HTTP ${resp.code} - $errorBody (Rules might be locked!)")
+                    }
                 }
 
-            // Keep status alive
-            pingConnection()
-        } catch (e: Exception) {
-            Log.w(TAG, "Exception during Realtime Database sync: ${e.message}")
+                // PUT /leaderboard/user_X.json
+                val lbReq = Request.Builder()
+                    .url("$DATABASE_URL/$LEADERBOARD_PATH/$userKey.json")
+                    .put(userJson.toRequestBody("application/json".toMediaType()))
+                    .build()
+                httpClient.newCall(lbReq).execute().close()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct REST user sync network error: ${e.message}")
+            }
         }
     }
 
