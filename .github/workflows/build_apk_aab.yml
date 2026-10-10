@@ -1,64 +1,141 @@
-name: Build APK and AAB (Separately Downloadable)
+name: Build APK and AAB for Google Play and Direct Install
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [ main, master ]
+  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+
+permissions:
+  contents: write
 
 jobs:
   build:
+    name: Build Release AAB & APK
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
 
-    - name: Grant Execute Permission to Gradlew
-      run: chmod +x gradlew || true
+      - name: Prepare Environment File
+        run: |
+          if [ ! -f .env ] && [ -f .env.example ]; then
+            cp .env.example .env
+          elif [ ! -f .env ]; then
+            touch .env
+          fi
 
-    - name: Create Release Keystore
-      run: |
-        keytool -genkeypair -v \
-          -keystore my-upload-key.jks \
-          -alias upload \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -storepass upload1234 \
-          -keypass upload1234 \
-          -dname "CN=Alif Water Sort, OU=Games, O=Alif, L=Dhaka, ST=Dhaka, C=BD"
+      - name: Restore Signing Keystores (Release Upload Key & Debug Key)
+        run: |
+          # 1. Restore Production Upload Keystore
+          if [ -f my-upload-key.jks.base64 ]; then
+            echo "Decoding my-upload-key.jks from base64..."
+            base64 -d my-upload-key.jks.base64 > my-upload-key.jks
+          elif [ ! -f my-upload-key.jks ]; then
+            echo "Generating production release upload key..."
+            keytool -genkeypair -v \
+              -keystore my-upload-key.jks \
+              -alias upload \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass upload1234 \
+              -keypass upload1234 \
+              -dname "CN=Alif Water Sort, OU=Games, O=Alif, L=Dhaka, ST=Dhaka, C=BD"
+          fi
+          ls -la my-upload-key.jks
 
-    - name: Build Release APK
-      run: |
-        STORE_PASSWORD=upload1234 KEY_PASSWORD=upload1234 ./gradlew assembleRelease || STORE_PASSWORD=upload1234 KEY_PASSWORD=upload1234 gradle assembleRelease
-        mkdir -p release_outputs/apk
-        find app/build/outputs/apk/release/ -name "*.apk" -exec cp {} release_outputs/apk/Alif_Water_Sort_Pro.apk \;
+          # 2. Restore Debug Keystore
+          if [ -f debug.keystore.base64 ]; then
+            echo "Decoding debug.keystore from base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            echo "Generating debug keystore..."
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+          fi
+          ls -la debug.keystore
 
-    - name: Build Release AAB (Google Play Bundle)
-      run: |
-        STORE_PASSWORD=upload1234 KEY_PASSWORD=upload1234 ./gradlew bundleRelease || STORE_PASSWORD=upload1234 KEY_PASSWORD=upload1234 gradle bundleRelease
-        mkdir -p release_outputs/aab
-        find app/build/outputs/bundle/release/ -name "*.aab" -exec cp {} release_outputs/aab/Alif_Water_Sort_Pro.aab \;
+      - name: Grant Execute Permission to gradlew
+        run: chmod +x gradlew
 
-    - name: Upload APK as Artifact (Separate Download)
-      uses: actions/upload-artifact@v4
-      with:
-        name: Alif-Water-Sort-Pro-APK
-        path: release_outputs/apk/Alif_Water_Sort_Pro.apk
-        if-no-files-found: warn
+      - name: Build Google Play Release App Bundle (AAB in Release Mode)
+        env:
+          STORE_PASSWORD: "upload1234"
+          KEY_PASSWORD: "upload1234"
+          KEY_ALIAS: "upload"
+        run: ./gradlew :app:bundleRelease --stacktrace --no-daemon
 
-    - name: Upload AAB as Artifact (Separate Download for Play Store)
-      uses: actions/upload-artifact@v4
-      with:
-        name: Alif-Water-Sort-Pro-AAB
-        path: release_outputs/aab/Alif_Water_Sort_Pro.aab
-        if-no-files-found: warn
+      - name: Build Release & Debug APK
+        env:
+          STORE_PASSWORD: "upload1234"
+          KEY_PASSWORD: "upload1234"
+          KEY_ALIAS: "upload"
+        run: ./gradlew :app:assembleRelease :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Organize Outputs & Verify Release Signatures
+        run: |
+          mkdir -p output_aab
+          mkdir -p output_apk
+          mkdir -p output_all
+
+          # Copy Google Play Store Release Bundle (.aab)
+          if [ -f app/build/outputs/bundle/release/app-release.aab ]; then
+            cp app/build/outputs/bundle/release/app-release.aab output_aab/Alif_Water_Sort_Pro.aab
+            cp app/build/outputs/bundle/release/app-release.aab output_all/Alif_Water_Sort_Pro.aab
+          elif [ -f build_outputs/Alif_Water_Sort_Pro.aab ]; then
+            cp build_outputs/Alif_Water_Sort_Pro.aab output_aab/Alif_Water_Sort_Pro.aab
+            cp build_outputs/Alif_Water_Sort_Pro.aab output_all/Alif_Water_Sort_Pro.aab
+          fi
+
+          # Copy Installable APKs
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk output_apk/Alif_Water_Sort_Pro.apk
+            cp app/build/outputs/apk/release/app-release.apk output_all/Alif_Water_Sort_Pro.apk
+          elif [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk output_apk/Alif_Water_Sort_Pro.apk
+            cp app/build/outputs/apk/debug/app-debug.apk output_all/Alif_Water_Sort_Pro.apk
+          fi
+
+          echo "=== Verifying AAB Release Certificate ==="
+          jarsigner -verify -verbose -certs output_aab/Alif_Water_Sort_Pro.aab | grep -E "CN=|jar verified" | head -n 5 || true
+
+          echo "=== Ready Artifacts ==="
+          ls -lh output_aab/
+          ls -lh output_apk/
+
+      - name: Upload 1. Google Play Release AAB (আলাদা AAB ডাউনলোড)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 1-GooglePlay-AAB-Release
+          path: output_aab/Alif_Water_Sort_Pro.aab
+          retention-days: 90
+
+      - name: Upload 2. Installable APK (আলাদা APK ডাউনলোড)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 2-DirectInstall-APK-Release
+          path: output_apk/Alif_Water_Sort_Pro.apk
+          retention-days: 90
+
+      - name: Upload 3. All Files (দুটো ফাইল একসাথে)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3-All-Files-APK-and-AAB
+          path: output_all/*
+          retention-days: 90
