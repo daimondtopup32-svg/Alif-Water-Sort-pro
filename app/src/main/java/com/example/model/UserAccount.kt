@@ -5,15 +5,13 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "users")
 data class UserAccount(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    @PrimaryKey
     val username: String,
-    val email: String = "",
-    val passwordHash: String = "",
-    val avatarEmoji: String = "💧",
-    val coins: Int = 15,
+    val passwordHash: String,
     val currentLevel: Int = 1,
-    val maxUnlockedLevel: Int = 1,
+    val highestUnlockedLevel: Int = 1,
+    val coins: Int = 100,
+    val totalWins: Int = 0,
     val isGuest: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )

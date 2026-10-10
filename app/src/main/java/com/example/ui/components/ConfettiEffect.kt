@@ -17,67 +17,55 @@ import kotlin.random.Random
 
 private data class Particle(
     val xRatio: Float,
-    val initialSpeedY: Float,
-    val speedX: Float,
+    val speed: Float,
     val size: Float,
     val color: Color,
     val rotationSpeed: Float
 )
 
 @Composable
-fun ConfettiCelebration(
-    isActive: Boolean,
-    modifier: Modifier = Modifier
-) {
-    if (!isActive) return
+fun ConfettiEffect(visible: Boolean, modifier: Modifier = Modifier) {
+    if (!visible) return
 
     val progress = remember { Animatable(0f) }
-
-    LaunchedEffect(isActive) {
-        progress.snapTo(0f)
-        progress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = 2800, easing = LinearEasing)
-        )
-    }
-
     val particles = remember {
         val colors = listOf(
-            Color(0xFFFF2A55), Color(0xFF00B0FF), Color(0xFF00E676),
-            Color(0xFFFFD600), Color(0xFFA838FF), Color(0xFFFF6D00),
-            Color(0xFFFF4081), Color(0xFFFFFFFF), Color(0xFF00E5FF)
+            Color(0xFFFF1744), Color(0xFF00E5FF), Color(0xFFFFD700),
+            Color(0xFF00E676), Color(0xFFFF4081), Color(0xFFD500F9)
         )
-        val rng = Random(42)
-        List(85) {
+        List(60) {
             Particle(
-                xRatio = rng.nextFloat(),
-                initialSpeedY = 0.7f + (rng.nextFloat() * 0.6f),
-                speedX = (rng.nextFloat() - 0.5f) * 0.4f,
-                size = 8f + (rng.nextFloat() * 12f),
-                color = colors[rng.nextInt(colors.size)],
-                rotationSpeed = (rng.nextFloat() - 0.5f) * 720f
+                xRatio = Random.nextFloat(),
+                speed = Random.nextFloat() * 0.6f + 0.7f,
+                size = Random.nextFloat() * 12f + 8f,
+                color = colors.random(),
+                rotationSpeed = Random.nextFloat() * 720f - 360f
             )
         }
     }
 
-    val p = progress.value
+    LaunchedEffect(visible) {
+        progress.snapTo(0f)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 2400, easing = LinearEasing)
+        )
+    }
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
-        for (item in particles) {
-            val startY = -40f
-            val currentY = startY + (p * h * item.initialSpeedY * 1.2f)
-            val currentX = (item.xRatio * w) + (p * item.speedX * w)
-            val currentRotation = p * item.rotationSpeed
-            val alpha = (1f - (p * 0.8f)).coerceIn(0f, 1f)
+        particles.forEach { p ->
+            val y = (progress.value * h * p.speed) % h
+            val x = (p.xRatio * w) + kotlin.math.sin(progress.value * 6f + p.xRatio * 10f) * 30f
+            val rotation = progress.value * p.rotationSpeed
 
-            rotate(degrees = currentRotation, pivot = Offset(currentX, currentY)) {
+            rotate(degrees = rotation, pivot = Offset(x, y)) {
                 drawRect(
-                    color = item.color.copy(alpha = alpha),
-                    topLeft = Offset(currentX - (item.size / 2f), currentY - (item.size / 3f)),
-                    size = Size(item.size, item.size * 0.65f)
+                    color = p.color,
+                    topLeft = Offset(x, y),
+                    size = Size(p.size, p.size * 0.6f)
                 )
             }
         }

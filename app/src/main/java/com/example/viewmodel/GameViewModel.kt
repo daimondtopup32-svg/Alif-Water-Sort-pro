@@ -2,748 +2,289 @@ package com.example.viewmodel
 
 import android.app.Activity
 import android.app.Application
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ads.AdManager
 import com.example.audio.SoundManager
 import com.example.data.GamePreferences
 import com.example.data.UserRepository
+import com.example.data.db.AppDatabase
+import com.example.data.firebase.RealtimeDatabaseManager
 import com.example.logic.GameSolver
+import com.example.logic.MoveHint
 import com.example.model.BackgroundTheme
 import com.example.model.GameLevel
-import com.example.model.LevelGenerator
 import com.example.model.LiquidColor
 import com.example.model.Tube
 import com.example.model.TubeSkin
 import com.example.model.UserAccount
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class GameUiState(
-    val currentLevel: Int = 1,
-    val maxUnlockedLevel: Int = 1,
-    val tubes: List<Tube> = emptyList(),
-    val selectedTubeIndex: Int? = null,
-    val isPouring: Boolean = false,
-    val pouringSourceIndex: Int? = null,
-    val pouringTargetIndex: Int? = null,
-    val pouringColor: LiquidColor? = null,
-    val pouringUnits: Int = 0,
-    val movesCount: Int = 0,
-    val canUndo: Boolean = false,
-    val isWon: Boolean = false,
-    val showVictoryDialog: Boolean = false,
-    val starsEarned: Int = 0,
-    val coins: Int = 100,
-    val coinsEarnedThisLevel: Int = 0,
-    val extraTubesCount: Int = 0,
-    val hintSourceIndex: Int? = null,
-    val hintTargetIndex: Int? = null,
-    val isStuck: Boolean = false,
-    val shakingTubeIndex: Int? = null,
-    val soundEnabled: Boolean = true,
-    val soundVolume: Float = 0.22f,
-    val vibrationEnabled: Boolean = true,
-    val isBengali: Boolean = true,
-    val tubeSkin: TubeSkin = TubeSkin.CLASSIC,
-    val bgTheme: BackgroundTheme = BackgroundTheme.AURORA_NIGHT,
-    val unlockedSkins: Set<String> = setOf(TubeSkin.CLASSIC.name),
-    val unlockedBgThemes: Set<String> = setOf(BackgroundTheme.AURORA_NIGHT.name),
-    val shopMessage: String? = null,
-    val adsWatchedForTube: Int = 0,
-    val showWatchAdDialog: Boolean = false,
-    val isAdLoading: Boolean = false,
-    val adErrorMessage: String? = null,
-    val currentUser: UserAccount? = null,
-    val isAuthLoading: Boolean = false,
-    val authErrorMessage: String? = null
-)
+enum class ScreenState {
+    LOADING, START_MENU, GAME, AUTH
+}
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
-    val soundManager = SoundManager(application)
+    private val db = AppDatabase.getDatabase(application)
     val preferences = GamePreferences(application)
-    val userRepository = UserRepository(application)
+    val userRepository = UserRepository(db.userDao(), preferences)
+    val adManager = AdManager(application)
+    val soundManager = SoundManager(application)
+    val realtimeDb = RealtimeDatabaseManager()
+    val solver = GameSolver()
 
-    private val _uiState = MutableStateFlow(GameUiState())
-    val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
+    private val _screenState = MutableStateFlow(ScreenState.LOADING)
+    val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
 
-    private val historyStack = mutableListOf<List<Tube>>()
-    private var initialLevelTubes = listOf<Tube>()
+    private val _currentUser = MutableStateFlow<UserAccount?>(null)
+    val currentUser: StateFlow<UserAccount?> = _currentUser.asStateFlow()
+
+    private val _currentLevel = MutableStateFlow(1)
+    val currentLevel: StateFlow<Int> = _currentLevel.asStateFlow()
+
+    private val _tubes = MutableStateFlow<List<Tube>>(emptyList())
+    val tubes: StateFlow<List<Tube>> = _tubes.asStateFlow()
+
+    private val _selectedTubeId = MutableStateFlow<Int?>(null)
+    val selectedTubeId: StateFlow<Int?> = _selectedTubeId.asStateFlow()
+
+    private val _movesCount = MutableStateFlow(0)
+    val movesCount: StateFlow<Int> = _movesCount.asStateFlow()
+
+    private val _isPouring = MutableStateFlow(false)
+    val isPouring: StateFlow<Boolean> = _isPouring.asStateFlow()
+
+    private val _pourColor = MutableStateFlow<LiquidColor?>(null)
+    val pourColor: StateFlow<LiquidColor?> = _pourColor.asStateFlow()
+
+    private val _isVictory = MutableStateFlow(false)
+    val isVictory: StateFlow<Boolean> = _isVictory.asStateFlow()
+
+    private val _activeHint = MutableStateFlow<MoveHint?>(null)
+    val activeHint: StateFlow<MoveHint?> = _activeHint.asStateFlow()
+
+    private val moveHistory = mutableListOf<List<Tube>>()
+
+    val tubeSkin = preferences.tubeSkin.stateIn(viewModelScope, SharingStarted.Lazily, TubeSkin.CLASSIC)
+    val bgTheme = preferences.bgTheme.stateIn(viewModelScope, SharingStarted.Lazily, BackgroundTheme.DEEP_NEBULA)
+    val soundEnabled = preferences.soundEnabled.stateIn(viewModelScope, SharingStarted.Lazily, true)
+    val hapticEnabled = preferences.hapticEnabled.stateIn(viewModelScope, SharingStarted.Lazily, true)
+    val volume = preferences.volume.stateIn(viewModelScope, SharingStarted.Lazily, 0.8f)
+    val extraTubesStock = preferences.extraTubesStock.stateIn(viewModelScope, SharingStarted.Lazily, 2)
 
     init {
-        // Synchronize preferences
-        soundManager.isSoundEnabled = preferences.soundEnabled.value
-        soundManager.masterVolume = preferences.soundVolume.value
-        soundManager.isVibrationEnabled = preferences.vibrationEnabled.value
-
-        _uiState.update {
-            it.copy(
-                currentLevel = preferences.currentLevel.value,
-                maxUnlockedLevel = preferences.maxUnlockedLevel.value,
-                coins = preferences.coins.value,
-                soundEnabled = preferences.soundEnabled.value,
-                soundVolume = preferences.soundVolume.value,
-                vibrationEnabled = preferences.vibrationEnabled.value,
-                isBengali = preferences.isBengali.value,
-                tubeSkin = preferences.tubeSkin.value,
-                bgTheme = preferences.bgTheme.value,
-                unlockedSkins = preferences.unlockedSkins.value,
-                unlockedBgThemes = preferences.unlockedBgThemes.value
-            )
-        }
-
-        loadLevel(preferences.currentLevel.value)
-
         viewModelScope.launch {
-            userRepository.initialize()
-            userRepository.currentUser.collect { user ->
-                _uiState.update { it.copy(currentUser = user) }
+            soundEnabled.collect { soundManager.isSoundEnabled = it }
+        }
+        viewModelScope.launch {
+            hapticEnabled.collect { soundManager.isHapticEnabled = it }
+        }
+        viewModelScope.launch {
+            volume.collect { soundManager.volume = it }
+        }
+        viewModelScope.launch {
+            preferences.currentUsername.collect { username ->
+                if (username != null) {
+                    val user = db.userDao().getUserByUsername(username)
+                    _currentUser.value = user
+                    if (user != null) {
+                        _currentLevel.value = user.currentLevel
+                    }
+                } else {
+                    _currentUser.value = null
+                }
             }
         }
     }
 
-    fun loadLevel(levelNumber: Int) {
-        val level = LevelGenerator.getLevel(levelNumber)
-        initialLevelTubes = level.tubes
-        historyStack.clear()
-
-        // Detect initial deadlock (for Level 21+ where 0 empty tubes exist and all glasses have colors)
-        val initiallyStuck = !GameSolver.hasValidMoves(level.tubes)
-
-        _uiState.update {
-            it.copy(
-                currentLevel = levelNumber,
-                tubes = level.tubes,
-                selectedTubeIndex = null,
-                isPouring = false,
-                pouringSourceIndex = null,
-                pouringTargetIndex = null,
-                pouringColor = null,
-                pouringUnits = 0,
-                movesCount = 0,
-                canUndo = false,
-                isWon = false,
-                showVictoryDialog = false,
-                starsEarned = 0,
-                coinsEarnedThisLevel = 0,
-                extraTubesCount = 0,
-                hintSourceIndex = null,
-                hintTargetIndex = null,
-                isStuck = initiallyStuck,
-                shakingTubeIndex = null
-            )
-        }
-        preferences.setCurrentLevel(levelNumber)
+    fun navigateTo(state: ScreenState) {
+        _screenState.value = state
     }
 
-    private var pendingTubeClick: Int? = null
+    fun startLevel(levelNum: Int) {
+        _currentLevel.value = levelNum
+        val level = GameLevel.generateLevel(levelNum)
+        _tubes.value = level.initialTubes
+        _selectedTubeId.value = null
+        _movesCount.value = 0
+        _isVictory.value = false
+        _activeHint.value = null
+        moveHistory.clear()
+        _screenState.value = ScreenState.GAME
+    }
 
-    fun onTubeClicked(index: Int) {
-        val state = _uiState.value
-        if (state.isWon) return
+    fun restartCurrentLevel() {
+        startLevel(_currentLevel.value)
+    }
 
-        // If currently pouring, queue the tapped tube so it immediately executes when the pour finishes!
-        if (state.isPouring) {
-            pendingTubeClick = index
+    fun nextLevel(activity: Activity?) {
+        val next = _currentLevel.value + 1
+        _currentLevel.value = next
+        viewModelScope.launch {
+            _currentUser.value?.let { user ->
+                userRepository.updateLevel(user.username, next)
+                realtimeDb.syncScore(user.username, next, (user.coins + 20))
+            }
+        }
+        if (activity != null && next % 3 == 0) {
+            adManager.showInterstitial(activity) {
+                startLevel(next)
+            }
+        } else {
+            startLevel(next)
+        }
+    }
+
+    fun onTubeClicked(tubeId: Int) {
+        if (_isPouring.value || _isVictory.value) return
+
+        val currentSelected = _selectedTubeId.value
+        if (currentSelected == null) {
+            val tube = _tubes.value.find { it.id == tubeId } ?: return
+            if (tube.isEmpty || tube.isCompleted) {
+                soundManager.vibrateShort()
+                return
+            }
+            _selectedTubeId.value = tubeId
+            soundManager.playSelectSound()
+            soundManager.vibrateShort()
+        } else if (currentSelected == tubeId) {
+            _selectedTubeId.value = null
+            soundManager.vibrateShort()
+        } else {
+            pour(currentSelected, tubeId)
+        }
+    }
+
+    private fun pour(fromId: Int, toId: Int) {
+        val currentTubes = _tubes.value
+        val fromTube = currentTubes.find { it.id == fromId } ?: return
+        val toTube = currentTubes.find { it.id == toId } ?: return
+
+        if (fromTube.isEmpty || toTube.isFull) {
+            _selectedTubeId.value = null
             return
         }
 
-        val selected = state.selectedTubeIndex
-        if (selected == null) {
-            // Select source tube
-            val tube = state.tubes.getOrNull(index) ?: return
-            if (tube.isEmpty) {
-                // Immediate shake and sound feedback so the user knows touch registered
-                soundManager.playError()
-                viewModelScope.launch {
-                    _uiState.update { it.copy(shakingTubeIndex = index) }
-                    delay(250)
-                    _uiState.update { it.copy(shakingTubeIndex = null) }
-                }
-                return
-            }
-            if (tube.isCompleted) {
-                // Already completed tube: friendly feedback
-                soundManager.playTap()
-                viewModelScope.launch {
-                    _uiState.update { it.copy(shakingTubeIndex = index) }
-                    delay(250)
-                    _uiState.update { it.copy(shakingTubeIndex = null) }
-                }
-                return
-            }
-
-            soundManager.playTap()
-            _uiState.update {
-                it.copy(
-                    selectedTubeIndex = index,
-                    hintSourceIndex = null,
-                    hintTargetIndex = null
-                )
-            }
-        } else {
-            if (selected == index) {
-                // Deselect current tube
-                soundManager.playTap()
-                _uiState.update { it.copy(selectedTubeIndex = null) }
-            } else {
-                val src = state.tubes.getOrNull(selected) ?: return
-                val dst = state.tubes.getOrNull(index) ?: return
-                val topColor = src.topColor ?: return
-
-                if (dst.canAccept(topColor)) {
-                    // Valid pour move!
-                    attemptPour(selected, index)
-                } else {
-                    // Cannot pour into this target tube.
-                    // If target tube has liquid and isn't completed, switch selection to it!
-                    if (!dst.isEmpty && !dst.isCompleted) {
-                        soundManager.playTap()
-                        _uiState.update {
-                            it.copy(
-                                selectedTubeIndex = index,
-                                hintSourceIndex = null,
-                                hintTargetIndex = null
-                            )
-                        }
-                    } else {
-                        // Shake feedback on invalid empty or completed target
-                        soundManager.playError()
-                        viewModelScope.launch {
-                            _uiState.update { it.copy(shakingTubeIndex = index) }
-                            delay(300)
-                            _uiState.update { it.copy(shakingTubeIndex = null) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private fun attemptPour(srcIdx: Int, dstIdx: Int) {
-        val state = _uiState.value
-        val src = state.tubes.getOrNull(srcIdx) ?: return
-        val dst = state.tubes.getOrNull(dstIdx) ?: return
-        val topColor = src.topColor ?: return
-
-        if (!dst.canAccept(topColor)) {
-            soundManager.playError()
-            viewModelScope.launch {
-                _uiState.update { it.copy(shakingTubeIndex = dstIdx) }
-                delay(300)
-                _uiState.update { it.copy(shakingTubeIndex = null) }
-            }
+        val movingColor = fromTube.topColor ?: return
+        if (!toTube.isEmpty && toTube.topColor != movingColor) {
+            _selectedTubeId.value = toId
+            soundManager.vibrateShort()
             return
         }
 
-        // Valid move!
-        val unitsToMove = src.topColorCount.coerceAtMost(dst.freeSpace)
-        if (unitsToMove <= 0) return
+        val countToMove = fromTube.topColorCount().coerceAtMost(toTube.availableSpace)
+        if (countToMove <= 0) {
+            _selectedTubeId.value = null
+            return
+        }
 
-        // Save history for Undo
-        historyStack.add(state.tubes.map { it.copy() })
-
-        // Start pouring animation
-        soundManager.playPour()
         viewModelScope.launch {
-            try {
-                _uiState.update {
-                    it.copy(
-                        isPouring = true,
-                        pouringSourceIndex = srcIdx,
-                        pouringTargetIndex = dstIdx,
-                        pouringColor = topColor,
-                        pouringUnits = unitsToMove,
-                        canUndo = true,
-                        movesCount = it.movesCount + 1
-                    )
-                }
+            moveHistory.add(currentTubes)
+            _isPouring.value = true
+            _pourColor.value = movingColor
+            soundManager.playPourSound()
+            soundManager.vibrateShort()
 
-                // Pour animation time (850ms: fast, fluid, and responsive)
-                delay(850)
+            val newFromSegments = fromTube.segments.dropLast(countToMove)
+            val newToSegments = toTube.segments + List(countToMove) { movingColor }
 
-                // Complete the transfer in the model
-                val (newSrc, popped) = src.popTop(unitsToMove)
-                val newDst = dst.push(popped)
-
-                val updatedTubes = _uiState.value.tubes.toMutableList().apply {
-                    this[srcIdx] = newSrc
-                    this[dstIdx] = newDst
-                }
-
-                // Check if this tube was just completed
-                if (newDst.isCompleted) {
-                    soundManager.playCompleteTube()
-                }
-
-                // Check win
-                val won = GameSolver.isWon(updatedTubes)
-
-                _uiState.update {
-                    it.copy(
-                        tubes = updatedTubes,
-                        selectedTubeIndex = null,
-                        isPouring = false,
-                        pouringSourceIndex = null,
-                        pouringTargetIndex = null,
-                        pouringColor = null,
-                        pouringUnits = 0,
-                        isWon = won
-                    )
-                }
-
-                if (won) {
-                    handleVictory()
-                } else {
-                    // Check if stuck (no valid moves)
-                    val hasMoves = GameSolver.hasValidMoves(updatedTubes)
-                    _uiState.update { it.copy(isStuck = !hasMoves) }
-
-                    // Process queued click if user tapped during the animation!
-                    val queued = pendingTubeClick
-                    pendingTubeClick = null
-                    if (queued != null) {
-                        onTubeClicked(queued)
-                    }
-                }
-            } catch (e: Exception) {
-                // Ensure state is cleanly reset if anything goes wrong
-                _uiState.update {
-                    it.copy(
-                        isPouring = false,
-                        pouringSourceIndex = null,
-                        pouringTargetIndex = null,
-                        selectedTubeIndex = null
-                    )
-                }
-            } finally {
-                // Guarantee isPouring never remains true
-                if (_uiState.value.isPouring) {
-                    _uiState.update {
-                        it.copy(
-                            isPouring = false,
-                            pouringSourceIndex = null,
-                            pouringTargetIndex = null
-                        )
-                    }
+            val updatedList = currentTubes.map { tube ->
+                when (tube.id) {
+                    fromId -> tube.copy(segments = newFromSegments)
+                    toId -> tube.copy(segments = newToSegments)
+                    else -> tube
                 }
             }
+
+            delay(280)
+            _tubes.value = updatedList
+            _selectedTubeId.value = null
+            _isPouring.value = false
+            _pourColor.value = null
+            _movesCount.value += 1
+            _activeHint.value = null
+
+            checkVictory(updatedList)
         }
     }
 
-    private fun handleVictory() {
-        soundManager.playLevelWin()
-        val moves = _uiState.value.movesCount
-        val levelNum = _uiState.value.currentLevel
+    private fun checkVictory(tubesList: List<Tube>) {
+        val nonEmpties = tubesList.filter { !it.isEmpty }
+        val allCompleted = nonEmpties.all { it.isCompleted }
+        if (allCompleted) {
+            _isVictory.value = true
+            soundManager.playVictorySound()
+            soundManager.vibrateSuccess()
 
-        // Star rating: 3 stars for fewest moves, 2 stars for good moves, 1 star for completion
-        val stars = when {
-            moves <= 8 + (levelNum * 2) -> 3
-            moves <= 14 + (levelNum * 2) -> 2
-            else -> 1
-        }
-        // Exactly 1 to 3 coins per level completion as requested
-        val rewardCoins = stars.coerceIn(1, 3)
-
-        preferences.unlockNextLevel(levelNum)
-        preferences.setLevelStars(levelNum, stars)
-        preferences.addCoins(rewardCoins)
-        syncUserStats()
-
-        _uiState.update {
-            it.copy(
-                showVictoryDialog = true,
-                starsEarned = stars,
-                coinsEarnedThisLevel = rewardCoins,
-                coins = preferences.coins.value,
-                maxUnlockedLevel = preferences.maxUnlockedLevel.value
-            )
-        }
-    }
-
-    fun undo() {
-        // Player cannot return/undo moves as requested: "গেমে যদি ভুল করে তাহলে একটি রিটার্ন পিছনে আসতে পারবে না"
-        return
-    }
-
-    fun restartLevel() {
-        if (_uiState.value.isPouring) return
-        soundManager.playTap()
-        loadLevel(_uiState.value.currentLevel)
-    }
-
-    fun addExtraTube() {
-        val state = _uiState.value
-        // Allow adding up to 5 extra tubes via video ads or coins as requested
-        if (state.isPouring || state.extraTubesCount >= 5) return
-
-        _uiState.update {
-            it.copy(
-                showWatchAdDialog = true,
-                adErrorMessage = null
-            )
-        }
-    }
-
-    fun buyExtraTubeWithCoins(cost: Int = 15) {
-        val state = _uiState.value
-        if (state.extraTubesCount >= 5) return
-        if (state.coins >= cost) {
-            preferences.spendCoins(cost)
-            grantExtraTube()
-            syncUserStats()
-        } else {
-            soundManager.playError()
-        }
-    }
-
-    fun grantExtraTube() {
-        val state = _uiState.value
-        if (state.extraTubesCount >= 5) return
-
-        soundManager.playCompleteTube()
-        val newTubeId = state.tubes.size
-        val newTube = Tube(id = newTubeId, liquids = emptyList(), isExtraTube = true)
-
-        _uiState.update {
-            it.copy(
-                tubes = it.tubes + newTube,
-                extraTubesCount = it.extraTubesCount + 1,
-                coins = preferences.coins.value,
-                isStuck = false,
-                showWatchAdDialog = false,
-                adsWatchedForTube = 0,
-                isAdLoading = false
-            )
-        }
-    }
-
-    fun watchAdForTube(activity: Activity?) {
-        val state = _uiState.value
-        if (state.isAdLoading) return
-
-        _uiState.update { it.copy(isAdLoading = true, adErrorMessage = null) }
-
-        if (activity != null && AdManager.isAdAvailable()) {
-            AdManager.showRewardedAd(
-                activity = activity,
-                onRewardEarned = {
-                    onAdWatchedSuccessfully()
-                },
-                onDismissed = {
-                    _uiState.update { it.copy(isAdLoading = false) }
-                },
-                onFailed = { error ->
-                    Log.w("GameViewModel", "Ad show notice: $error, falling back to simulated ad")
-                    onAdWatchedSuccessfully()
-                }
-            )
-        } else {
             viewModelScope.launch {
-                delay(1000)
-                onAdWatchedSuccessfully()
+                _currentUser.value?.let { user ->
+                    userRepository.addCoins(user.username, 25)
+                }
             }
         }
     }
 
-    private fun onAdWatchedSuccessfully() {
-        soundManager.playTap()
-        val nextCount = _uiState.value.adsWatchedForTube + 1
-        _uiState.update {
-            it.copy(
-                adsWatchedForTube = nextCount,
-                isAdLoading = false
-            )
-        }
-        // Player must watch 3 videos to get 1 extra tube
-        if (nextCount >= 3) {
-            grantExtraTube()
-        }
-    }
-
-    fun dismissWatchAdDialog() {
-        _uiState.update {
-            it.copy(
-                showWatchAdDialog = false,
-                isAdLoading = false,
-                adErrorMessage = null
-            )
+    fun undoMove() {
+        if (moveHistory.isNotEmpty()) {
+            _tubes.value = moveHistory.removeAt(moveHistory.size - 1)
+            _selectedTubeId.value = null
+            _movesCount.value = (_movesCount.value - 1).coerceAtLeast(0)
+            soundManager.vibrateShort()
         }
     }
 
     fun requestHint() {
-        val state = _uiState.value
-        if (state.isPouring || state.isWon) return
+        val hint = solver.findNextMove(_tubes.value)
+        _activeHint.value = hint
+        soundManager.vibrateShort()
+    }
 
+    fun addExtraTube() {
+        val current = _tubes.value
+        val newId = (current.maxOfOrNull { it.id } ?: 0) + 1
+        _tubes.value = current + Tube(id = newId, segments = emptyList(), isExtraTube = true)
         viewModelScope.launch {
-            val hint = GameSolver.findHint(state.tubes)
-            if (hint != null) {
-                soundManager.playTap()
-                _uiState.update {
-                    it.copy(
-                        hintSourceIndex = hint.fromIndex,
-                        hintTargetIndex = hint.toIndex,
-                        selectedTubeIndex = hint.fromIndex
-                    )
-                }
-            } else {
-                soundManager.playError()
-                _uiState.update { it.copy(isStuck = true) }
-            }
+            preferences.addExtraTubeStock(-1)
         }
+        soundManager.vibrateSuccess()
     }
 
-    fun nextLevel() {
-        _uiState.update { it.copy(showVictoryDialog = false) }
-        loadLevel(_uiState.value.currentLevel + 1)
-    }
-
-    fun dismissVictoryDialog() {
-        _uiState.update { it.copy(showVictoryDialog = false) }
-    }
-
-    fun toggleSound() {
-        val newVal = !_uiState.value.soundEnabled
-        soundManager.isSoundEnabled = newVal
-        preferences.setSoundEnabled(newVal)
-        _uiState.update { it.copy(soundEnabled = newVal) }
-    }
-
-    fun setSoundVolume(volume: Float) {
-        soundManager.masterVolume = volume
-        preferences.setSoundVolume(volume)
-        _uiState.update { it.copy(soundVolume = volume) }
-    }
-
-    fun toggleVibration() {
-        val newVal = !_uiState.value.vibrationEnabled
-        soundManager.isVibrationEnabled = newVal
-        preferences.setVibrationEnabled(newVal)
-        _uiState.update { it.copy(vibrationEnabled = newVal) }
-    }
-
-    fun toggleLanguage() {
-        val newVal = !_uiState.value.isBengali
-        preferences.setIsBengali(newVal)
-        _uiState.update { it.copy(isBengali = newVal) }
-    }
-
-    fun setTubeSkin(skin: TubeSkin) {
-        preferences.setTubeSkin(skin)
-        _uiState.update { it.copy(tubeSkin = skin) }
-    }
-
-    fun setBgTheme(theme: BackgroundTheme) {
-        preferences.setBgTheme(theme)
-        _uiState.update { it.copy(bgTheme = theme) }
-    }
-
-    fun buyOrEquipSkin(skin: TubeSkin) {
-        val state = _uiState.value
-        val isUnlocked = state.unlockedSkins.contains(skin.name) || skin.coinCost == 0
-        if (isUnlocked) {
-            setTubeSkin(skin)
-            soundManager.playTap()
-            _uiState.update {
-                it.copy(
-                    shopMessage = if (it.isBengali) "${skin.titleBn} সিলেক্ট করা হয়েছে" else "${skin.titleEn} equipped"
-                )
-            }
-        } else {
-            if (state.coins >= skin.coinCost) {
-                preferences.spendCoins(skin.coinCost)
-                preferences.unlockSkin(skin)
-                preferences.setTubeSkin(skin)
-                soundManager.playCompleteTube()
-                _uiState.update {
-                    it.copy(
-                        coins = preferences.coins.value,
-                        unlockedSkins = it.unlockedSkins + skin.name,
-                        tubeSkin = skin,
-                        shopMessage = if (it.isBengali) "${skin.titleBn} আনলক ও সিলেক্ট করা হয়েছে! 🎉" else "${skin.titleEn} Unlocked! 🎉"
-                    )
+    fun addStockFromRewardedAd(activity: Activity, onDone: () -> Unit) {
+        adManager.showRewarded(
+            activity,
+            onRewardEarned = {
+                viewModelScope.launch {
+                    preferences.addExtraTubeStock(1)
+                    addExtraTube()
+                    onDone()
                 }
-            } else {
-                soundManager.playError()
-                _uiState.update {
-                    it.copy(
-                        shopMessage = if (it.isBengali) "কয়েন পর্যাপ্ত নয়! আরও ${skin.coinCost - it.coins} কয়েন প্রয়োজন।" else "Not enough coins! Need ${skin.coinCost - it.coins} more."
-                    )
-                }
+            },
+            onFailedOrDismiss = {
+                onDone()
             }
-        }
+        )
     }
 
-    fun buyOrEquipBgTheme(theme: BackgroundTheme) {
-        val state = _uiState.value
-        val isUnlocked = state.unlockedBgThemes.contains(theme.name) || theme.coinCost == 0
-        if (isUnlocked) {
-            setBgTheme(theme)
-            soundManager.playTap()
-            _uiState.update {
-                it.copy(
-                    shopMessage = if (it.isBengali) "${theme.titleBn} থিম সিলেক্ট করা হয়েছে" else "${theme.titleEn} theme equipped"
-                )
-            }
-        } else {
-            if (state.coins >= theme.coinCost) {
-                preferences.spendCoins(theme.coinCost)
-                preferences.unlockBgTheme(theme)
-                preferences.setBgTheme(theme)
-                soundManager.playCompleteTube()
-                _uiState.update {
-                    it.copy(
-                        coins = preferences.coins.value,
-                        unlockedBgThemes = it.unlockedBgThemes + theme.name,
-                        bgTheme = theme,
-                        shopMessage = if (it.isBengali) "${theme.titleBn} থিম আনলক হয়েছে! 🎉" else "${theme.titleEn} Theme Unlocked! 🎉"
-                    )
-                }
-            } else {
-                soundManager.playError()
-                _uiState.update {
-                    it.copy(
-                        shopMessage = if (it.isBengali) "কয়েন পর্যাপ্ত নয়! আরও ${theme.coinCost - it.coins} কয়েন প্রয়োজন।" else "Not enough coins! Need ${theme.coinCost - it.coins} more."
-                    )
-                }
-            }
-        }
-    }
-
-    fun clearShopMessage() {
-        _uiState.update { it.copy(shopMessage = null) }
-    }
-
-    // --- Authentication & User Profile ---
-
-    fun login(usernameOrEmail: String, password: String, onSuccess: () -> Unit) {
+    fun buyTubeWithCoins(onDone: () -> Unit) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
-            val result = userRepository.login(usernameOrEmail, password)
-            result.onSuccess { user ->
-                soundManager.playLevelWin()
-                _uiState.update {
-                    it.copy(
-                        currentUser = user,
-                        isAuthLoading = false,
-                        authErrorMessage = null,
-                        coins = user.coins,
-                        currentLevel = user.currentLevel,
-                        maxUnlockedLevel = user.maxUnlockedLevel
-                    )
-                }
-                preferences.setCoins(user.coins)
-                preferences.setMaxUnlockedLevel(user.maxUnlockedLevel)
-                preferences.setCurrentLevel(user.currentLevel)
-                loadLevel(user.currentLevel)
-                onSuccess()
-            }.onFailure { error ->
-                soundManager.playError()
-                _uiState.update {
-                    it.copy(
-                        isAuthLoading = false,
-                        authErrorMessage = if (it.isBengali) {
-                            when {
-                                error.message?.contains("User not found", ignoreCase = true) == true -> "ব্যবহারকারী পাওয়া যায়নি"
-                                error.message?.contains("Incorrect password", ignoreCase = true) == true -> "ভুল পাসওয়ার্ড"
-                                else -> error.message ?: "লগইন ব্যর্থ হয়েছে"
-                            }
-                        } else {
-                            error.message ?: "Login failed"
-                        }
-                    )
-                }
+            val user = _currentUser.value
+            if (user != null && user.coins >= 50) {
+                userRepository.addCoins(user.username, -50)
+                addExtraTube()
+                onDone()
             }
         }
     }
 
-    fun register(
-        username: String,
-        email: String,
-        password: String,
-        avatarEmoji: String,
-        onSuccess: () -> Unit
-    ) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
-            val result = userRepository.register(username, email, password, avatarEmoji)
-            result.onSuccess { user ->
-                soundManager.playLevelWin()
-                _uiState.update {
-                    it.copy(
-                        currentUser = user,
-                        isAuthLoading = false,
-                        authErrorMessage = null,
-                        coins = user.coins,
-                        currentLevel = user.currentLevel,
-                        maxUnlockedLevel = user.maxUnlockedLevel
-                    )
-                }
-                preferences.setCoins(user.coins)
-                preferences.setMaxUnlockedLevel(user.maxUnlockedLevel)
-                preferences.setCurrentLevel(user.currentLevel)
-                loadLevel(user.currentLevel)
-                onSuccess()
-            }.onFailure { error ->
-                soundManager.playError()
-                _uiState.update {
-                    it.copy(
-                        isAuthLoading = false,
-                        authErrorMessage = if (it.isBengali) {
-                            when {
-                                error.message?.contains("already exists", ignoreCase = true) == true -> "এই নামের ব্যবহারকারী ইতিমধ্যে রয়েছে"
-                                error.message?.contains("Email already in use", ignoreCase = true) == true -> "এই ইমেইলটি ইতিমধ্যে ব্যবহৃত হয়েছে"
-                                else -> error.message ?: "রেজিস্ট্রেশন ব্যর্থ হয়েছে"
-                            }
-                        } else {
-                            error.message ?: "Registration failed"
-                        }
-                    )
-                }
-            }
-        }
-    }
-
-    fun playAsGuest(onSuccess: () -> Unit) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
-            val guest = userRepository.playAsGuest()
-            _uiState.update {
-                it.copy(
-                    currentUser = guest,
-                    isAuthLoading = false,
-                    authErrorMessage = null
-                )
-            }
-            onSuccess()
-        }
-    }
-
-    fun logout(onLoggedOut: () -> Unit) {
-        userRepository.logout()
-        _uiState.update { it.copy(currentUser = null) }
-        onLoggedOut()
-    }
-
-    fun updateUserAvatar(emoji: String) {
-        viewModelScope.launch {
-            userRepository.updateAvatar(emoji)
-        }
-    }
-
-    fun syncUserStats() {
-        val user = _uiState.value.currentUser ?: return
-        viewModelScope.launch {
-            userRepository.updateUserStats(
-                coins = _uiState.value.coins,
-                currentLevel = _uiState.value.currentLevel,
-                maxUnlockedLevel = _uiState.value.maxUnlockedLevel
-            )
-        }
+    override fun onCleared() {
+        super.onCleared()
+        soundManager.release()
     }
 }
