@@ -38,8 +38,10 @@ jobs:
           # 1. Restore Production Upload Keystore
           if [ -f my-upload-key.jks.base64 ]; then
             echo "Decoding my-upload-key.jks from base64..."
-            base64 -d my-upload-key.jks.base64 > my-upload-key.jks
-          elif [ ! -f my-upload-key.jks ]; then
+            (base64 -d my-upload-key.jks.base64 > my-upload-key.jks 2>/dev/null) || (base64 --decode my-upload-key.jks.base64 > my-upload-key.jks 2>/dev/null) || (openssl base64 -d -in my-upload-key.jks.base64 -out my-upload-key.jks 2>/dev/null)
+          fi
+          
+          if [ ! -f my-upload-key.jks ] || [ ! -s my-upload-key.jks ]; then
             echo "Generating production release upload key..."
             keytool -genkeypair -v \
               -keystore my-upload-key.jks \
@@ -51,13 +53,16 @@ jobs:
               -keypass upload1234 \
               -dname "CN=Alif Water Sort, OU=Games, O=Alif, L=Dhaka, ST=Dhaka, C=BD"
           fi
+          cp my-upload-key.jks app/my-upload-key.jks 2>/dev/null || true
           ls -la my-upload-key.jks
 
           # 2. Restore Debug Keystore
           if [ -f debug.keystore.base64 ]; then
             echo "Decoding debug.keystore from base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
-          elif [ ! -f debug.keystore ]; then
+            (base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null) || (base64 --decode debug.keystore.base64 > debug.keystore 2>/dev/null) || (openssl base64 -d -in debug.keystore.base64 -out debug.keystore 2>/dev/null)
+          fi
+          
+          if [ ! -f debug.keystore ] || [ ! -s debug.keystore ]; then
             echo "Generating debug keystore..."
             keytool -genkeypair -v \
               -keystore debug.keystore \
@@ -69,6 +74,7 @@ jobs:
               -keypass android \
               -dname "CN=Android Debug, O=Android, C=US"
           fi
+          cp debug.keystore app/debug.keystore 2>/dev/null || true
           ls -la debug.keystore
 
       - name: Grant Execute Permission to gradlew
@@ -79,14 +85,14 @@ jobs:
           STORE_PASSWORD: "upload1234"
           KEY_PASSWORD: "upload1234"
           KEY_ALIAS: "upload"
-        run: ./gradlew :app:bundleRelease --stacktrace --no-daemon
+        run: ./gradlew :app:bundleRelease --stacktrace --no-daemon --no-configuration-cache
 
       - name: Build Release & Debug APK
         env:
           STORE_PASSWORD: "upload1234"
           KEY_PASSWORD: "upload1234"
           KEY_ALIAS: "upload"
-        run: ./gradlew :app:assembleRelease :app:assembleDebug --stacktrace --no-daemon
+        run: ./gradlew :app:assembleRelease :app:assembleDebug --stacktrace --no-daemon --no-configuration-cache
 
       - name: Organize Outputs & Verify Release Signatures
         run: |
